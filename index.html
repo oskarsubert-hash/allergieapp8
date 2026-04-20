@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>FoodScan GLOBAL FIX</title>
+
+<style>
+body{
+margin:0;
+font-family:Arial;
+background:#ffffff;
+color:#111;
+text-align:center;
+}
+
+.screen{display:none;padding:20px}
+.active{display:block}
+
+h1,h2{color:#0d47a1}
+
+button{
+padding:16px;
+width:92%;
+margin:10px;
+border:none;
+border-radius:14px;
+font-size:18px;
+background:#1976d2;
+color:white;
+font-weight:bold;
+}
+
+input{
+padding:16px;
+width:92%;
+margin:10px;
+border-radius:14px;
+border:2px solid #1976d2;
+font-size:16px;
+background:#fff;
+color:#111;
+font-weight:bold;
+}
+
+.list{
+background:#f5f5f5;
+border-radius:14px;
+margin:10px;
+max-height:280px;
+overflow:auto;
+border:1px solid #ddd;
+}
+
+.item{
+padding:14px;
+border-bottom:1px solid #ddd;
+cursor:pointer;
+font-weight:bold;
+text-align:left;
+background:white;
+}
+
+.card{
+background:white;
+margin:10px;
+padding:16px;
+border-radius:16px;
+text-align:left;
+box-shadow:0 3px 12px rgba(0,0,0,0.1);
+border-left:6px solid #1976d2;
+}
+
+.good{color:#2e7d32;font-size:28px;font-weight:bold}
+.bad{color:#c62828;font-size:28px;font-weight:bold}
+.unknown{color:#f9a825;font-size:28px;font-weight:bold}
+
+.nutri{
+display:inline-block;
+padding:6px 12px;
+background:#fff8e1;
+border:1px solid #fbc02d;
+border-radius:10px;
+margin-top:8px;
+font-weight:bold;
+}
+</style>
+</head>
+
+<body>
+
+<!-- ALLERGIES -->
+<div id="allergies" class="screen active">
+<h2>🧠 Allergien auswählen</h2>
+
+<input id="searchAllergy" placeholder="Allergie suchen..." oninput="renderAllergies()">
+
+<div id="allergyList" class="list"></div>
+
+<button onclick="saveAllergies()">Weiter</button>
+</div>
+
+<!-- HOME -->
+<div id="home" class="screen">
+<h2>🔎 Produktsuche / Barcode</h2>
+
+<input id="search" placeholder="Name oder Barcode">
+
+<button onclick="runSearch()">Suchen</button>
+
+<button onclick="show('allergies')">⚙️ Allergien</button>
+<button onclick="showHistory()">📜 Verlauf</button>
+
+<div id="results" class="list"></div>
+</div>
+
+<!-- RESULT -->
+<div id="result" class="screen">
+<h2 id="name"></h2>
+
+<div id="status"></div>
+
+<div class="card" id="info"></div>
+
+<button onclick="show('home')">⬅ Zurück</button>
+</div>
+
+<!-- HISTORY -->
+<div id="history" class="screen">
+<h2>📜 Verlauf</h2>
+<div id="hlist"></div>
+<button onclick="show('home')">Zurück</button>
+</div>
+
+<script>
+
+const ALL=[
+"Milch","Laktose","Casein","Whey",
+"Eier","Gluten","Weizen","Roggen","Gerste",
+"Nüsse","Erdnüsse","Mandeln","Haselnüsse","Cashew","Walnüsse","Pistazien",
+"Soja","Fisch","Sesam","Sellerie","Senf","Sulfite","Lupinen","Krebstiere"
+];
+
+let selected=[];
+
+/* SCREEN */
+function show(id){
+document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
+document.getElementById(id).classList.add("active");
+}
+
+/* ALLERGIES */
+function renderAllergies(){
+const q=document.getElementById("searchAllergy").value.toLowerCase();
+const list=document.getElementById("allergyList");
+list.innerHTML="";
+
+ALL.filter(a=>a.toLowerCase().includes(q)).forEach(a=>{
+const div=document.createElement("div");
+div.className="item";
+div.innerHTML=`${a} ${selected.includes(a)?"✅":"⬜"}`;
+
+div.onclick=()=>{
+selected.includes(a)
+? selected=selected.filter(x=>x!==a)
+: selected.push(a);
+renderAllergies();
+};
+
+list.appendChild(div);
+});
+}
+
+function saveAllergies(){
+localStorage.setItem("allergies",JSON.stringify(selected));
+show("home");
+}
+
+/* SEARCH */
+function runSearch(){
+const q=document.getElementById("search").value.trim();
+if(!q) return;
+
+if(/^\d+$/.test(q)){
+fetchBarcode(q);
+}else{
+searchName(q);
+}
+}
+
+/* BARCODE */
+function fetchBarcode(code){
+fetch(`https://world.openfoodfacts.org/api/v0/product/${code}.json`)
+.then(r=>r.json())
+.then(d=>{
+if(!d.product){alert("Nicht gefunden");return;}
+analyze(d.product);
+});
+}
+
+/* NAME SEARCH */
+function searchName(q){
+fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${q}&search_simple=1&action=process&json=1&page_size=10`)
+.then(r=>r.json())
+.then(d=>{
+const list=document.getElementById("results");
+list.innerHTML="";
+
+(d.products||[]).forEach(p=>{
+const div=document.createElement("div");
+div.className="item";
+div.innerText=p.product_name||"Unbekannt";
+
+div.onclick=()=>analyze(p);
+
+list.appendChild(div);
+});
+});
+}
+
+/* 🌍 MULTI LANGUAGE FIX */
+function normalizeText(text){
+return (text||"")
+.toLowerCase()
+.normalize("NFD")
+.replace(/[\u0300-\u036f]/g,""); // removes accents (fr/en fix)
+}
+
+/* SAFE CHECK */
+function analyze(p){
+
+const allergies=JSON.parse(localStorage.getItem("allergies")||"[]");
+
+/* 🌍 MULTI LANGUAGE TEXT */
+const text=normalizeText(`
+${p.ingredients_text||""}
+${(p.ingredients_text_fr||"")}
+${(p.ingredients_text_de||"")}
+${(p.ingredients_text_en||"")}
+${(p.allergens_tags||[]).join(" ")}
+${(p.traces_tags||[]).join(" ")}
+`);
+
+const map={
+"Milch":["milk","lactose","casein","whey","lait","laitiere","milch"],
+"Nüsse":["nuts","almond","hazelnut","cashew","walnut","pistachio","noisette","noix"],
+"Eier":["egg","oeuf"],
+"Gluten":["gluten","wheat","ble","rye","seigle","barley","orge"],
+"Soja":["soy","soja"],
+"Fisch":["fish","poisson"],
+"Sesam":["sesame","sesame"],
+"Krebstiere":["crustaceans","crustaces"]
+};
+
+let found=[];
+
+for(let a of allergies){
+let keys=map[a]||[a.toLowerCase()];
+if(keys.some(k=>text.includes(k))){
+found.push(a);
+}
+}
+
+let status="🟢 SICHER";
+let cls="good";
+
+if(found.length>0){
+status="🔴 NICHT SICHER";
+cls="bad";
+}
+
+let nutri=p.nutriscore_grade? p.nutriscore_grade.toUpperCase():"N/A";
+
+document.getElementById("name").innerText=p.product_name||"Unbekannt";
+
+document.getElementById("status").innerHTML=`
+<div class="${cls}">${status}</div>
+<div class="nutri">Nutri-Score: ${nutri}</div>
+<div style="font-size:14px;margin-top:5px">
+Gefunden: ${found.length?found.join(", "):"keine"}
+</div>
+`;
+
+document.getElementById("info").innerHTML=`
+<b>Zutaten:</b><br>${p.ingredients_text||"Keine Daten"}<br><br>
+<b>Marke:</b> ${p.brands||"Unbekannt"}
+`;
+
+findAlternative(p.product_name);
+
+saveHistory({name:p.product_name||"?",status});
+show("result");
+}
+
+/* ALTERNATIVE */
+function findAlternative(name){
+
+if(!name) return;
+
+fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${name}&search_simple=1&action=process&json=1&page_size=10`)
+.then(r=>r.json())
+.then(d=>{
+
+const alt=(d.products||[]).find(x=>x.product_name && x.url && x.product_name!==name);
+
+if(!alt) return;
+
+const div=document.createElement("div");
+div.className="card";
+
+div.innerHTML=`
+<b>🔄 Alternative:</b><br><br>
+<a href="${alt.url}" target="_blank" style="color:#1976d2;font-weight:bold">
+👉 ${alt.product_name}
+</a>
+`;
+
+document.getElementById("info").appendChild(div);
+
+});
+}
+
+/* HISTORY */
+function saveHistory(item){
+let h=JSON.parse(localStorage.getItem("h")||"[]");
+h.push(item);
+localStorage.setItem("h",JSON.stringify(h));
+}
+
+function showHistory(){
+let h=JSON.parse(localStorage.getItem("h")||"[]");
+let div=document.getElementById("hlist");
+div.innerHTML="";
+
+h.forEach(i=>{
+let d=document.createElement("div");
+d.className="card";
+d.innerText=i.name+" - "+i.status;
+div.appendChild(d);
+});
+
+show("history");
+}
+
+renderAllergies();
+
+</script>
+
+</body>
+</html>
